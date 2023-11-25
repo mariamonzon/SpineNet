@@ -77,18 +77,19 @@ def split_into_patches_exhaustive(
     """
 
     h, w, d = scan.shape
-    if pixel_spacing != -1:
-        patch_edge_len = int(patch_edge_len * 10 / pixel_spacing)
-
-    if patch_edge_len > min(scan.shape[0], scan.shape[1]):
-        patch_edge_len = min(scan.shape[0:2]) - 1
+    if len(pixel_spacing)==1:
+        patch_edge_len = int(patch_edge_len * 10 / pixel_spacing), int(patch_edge_len * 10 / pixel_spacing)
+    else:
+        patch_edge_len = int(patch_edge_len * 10 / pixel_spacing[0]), int(patch_edge_len * 10 / pixel_spacing[1])
+    if any(patch_edge_len) > min(scan.shape[0], scan.shape[1]):
+        patch_edge_len = (min(scan.shape[0], patch_edge_len[0]) - 1, min(scan.shape[1], patch_edge_len[1]) - 1)
 
     # effective_edge_len = how far patches should be spaced from each other
-    effective_patch_edge_len = int(patch_edge_len * (1 - overlap_param))
+    effective_patch_edge_len = int(patch_edge_len[0] * (1 - overlap_param)),  int(patch_edge_len[1] * (1 - overlap_param))
 
     # work out tiling for scan
-    num_patches_across = (w // effective_patch_edge_len) + 1
-    num_patches_down = (h // effective_patch_edge_len) + 1
+    num_patches_across = (w // effective_patch_edge_len[1]) + 1
+    num_patches_down = (h // effective_patch_edge_len[0]) + 1
     # total number of patches in each slice
     num_patches = num_patches_down * num_patches_across
 
@@ -97,17 +98,17 @@ def split_into_patches_exhaustive(
 
     for slice_idx in range(d):
         for i in range(num_patches_across):
-            x1 = i * effective_patch_edge_len
-            x2 = x1 + patch_edge_len
+            x1 = i * effective_patch_edge_len[1]
+            x2 = x1 + patch_edge_len[1]
             if x2 >= w:
                 x2 = -1
-                x1 = -(patch_edge_len)
+                x1 = -(patch_edge_len[1])
             for j in range(num_patches_down):
-                y1 = j * effective_patch_edge_len
-                y2 = y1 + patch_edge_len
+                y1 = j * effective_patch_edge_len[0]
+                y2 = y1 + patch_edge_len[0]
                 if y2 >= h:
                     y2 = -1
-                    y1 = -(patch_edge_len)
+                    y1 = -(patch_edge_len[0])
                 this_patch = np.array(scan[y1:y2, x1:x2, slice_idx])
                 resized_patch = cv2.resize(
                     this_patch, patch_size, interpolation=cv2.INTER_CUBIC
