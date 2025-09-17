@@ -1,6 +1,6 @@
 [project]
 name = "spinenet"
-version = "2.0.2"
+version = "2.0.3"
 description = "Automated software for analysing clinical spinal MRI scans."
 readme = "README.md"
 authors = [
@@ -16,12 +16,14 @@ classifiers = [
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+
 ]
-requires-python = ">=3.9,<3.13"
+requires-python = ">=3.9,<3.12"
 dependencies = [
     "opencv-python>=4.5.0,<4.8.0.76",  # Exclude problematic version
     "numpy<2",
-    "torch>=2.0.0",
+    "torch>=2.0.0,<=2.5.0",
     "torchvision>=0.15.0",
     "numpy>=1.20.0",
     "scipy>=1.7.0",

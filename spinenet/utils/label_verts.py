@@ -245,18 +245,18 @@ def construct_input_to_context_model(vert_dicts, scan, pixel_spacing):
     box_coords = np.asarray([vert_dict["average_polygon"] for vert_dict in vert_dicts])
     y_centroids = (
         np.asarray([np.mean(box_coord[:, 1]) for box_coord in box_coords])
-        * pixel_spacing
+        * pixel_spacing[1]
     )
     y_maxes = (
         np.asarray([np.max(box_coord[:, 1]) for box_coord in box_coords])
-        * pixel_spacing
+        * pixel_spacing[1]
     )
     y_mins = (
         np.asarray([np.min(box_coord[:, 1]) for box_coord in box_coords])
-        * pixel_spacing
+        * pixel_spacing[1]
     )
     widths = (y_maxes - y_mins) / 2
-    image_height = int(scan.shape[0] * pixel_spacing)
+    image_height = int(scan.shape[0] * pixel_spacing[0])
     height_scaled_appearance_features = np.zeros((int(image_height), 24))
 
     for i in range(len(vert_dicts)):

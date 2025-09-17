@@ -1,31 +1,30 @@
 import numpy as np
-import torch
 import cv2
+import torch
 from typing import List, Tuple, Dict, Union
 
 
-def normalize_patch(patch : np.ndarray, 
-                    upper_percentile: float = 99.5, 
-                    lower_percentile: float = 0.5) -> np.ndarray:   
+def normalize_patch(
+        patch: np.ndarray,
+        upper_percentile: float = 99.5,
+        lower_percentile: float = 0.5
+) -> np.ndarray:
     """
-    Takes in a patch and normalizes it in each slice robustly using the
-    `upper_percentile` and `lower_percentile` percentile values. Values are linearly
-    mapped such that pixels at the `upper_percentile` of intensity values are mapped to
-    1 and pixels at the `lower_percentile` of intensity values are mapped to 0.
+    Normalize a single image patch using robust percentile range.
 
     Parameters
     ----------
     patch : np.ndarray
-        The patch to be normalized
-    upper_percentile : float
-        The percentile value to use for the upper bound of the normalization
-    lower_percentile : float
-        The percentile value to use for the lower bound of the normalization
+        2D image patch.
+    upper_percentile : float, optional
+        Upper percentile for normalization range.
+    lower_percentile : float, optional
+        Lower percentile for normalization range.
 
     Returns
     -------
-    patch : np.ndarray
-        The normalized patch
+    np.ndarray
+        Patch normalized to ~[0, 1].
     """
     upper_percentile_val = np.percentile(patch, upper_percentile)
     lower_percentile_val = np.percentile(patch, lower_percentile)
@@ -34,17 +33,17 @@ def normalize_patch(patch : np.ndarray,
         patch = (patch - patch.min()) / (patch.ptp() + 1e-9)
     else:
         patch = (patch - patch.min()) / (robust_range + 1e-9)
-
     return patch
 
+
 def split_into_patches_exhaustive(
-    scan: np.ndarray,
-    pixel_spacing: float,
-    patch_edge_len: Union[int,float] = 26,
-    overlap_param: float = 0.4,
-    patch_size: Tuple[int,int] = (224, 224),
-    using_resnet: bool = True,
-) -> Tuple[torch.Tensor,List[List[Dict]]]:
+        scan: np.ndarray,
+        pixel_spacing: float,
+        patch_edge_len: Union[int, float] = 26,
+        overlap_param: float = 0.4,
+        patch_size: Tuple[int, int] = (224, 224),
+        using_resnet: bool = True,
+        ) -> Tuple[torch.Tensor, List[List[Dict]]]:
     """
     Takes in a 3d scan volume and splits it into patches, resizes them then
     normalises them to be passed to the detection network.
@@ -63,10 +62,10 @@ def split_into_patches_exhaustive(
     remove_black_space : bool
         Whether to remove black space from the scan.
     patch_size : Tuple[int,int]
-        The size of the patches to be created.  
+        The size of the patches to be created.
     using_resnet : bool
         Changes patch normalization to match the method used to train the VFR ResNet.
-    
+
     Returns
     -------
     patches : torch.Tensor
@@ -77,6 +76,10 @@ def split_into_patches_exhaustive(
     """
 
     h, w, d = scan.shape
+
+    if  isinstance(pixel_spacing, (list, tuple, np.ndarray)):
+        pixel_spacing = float(pixel_spacing[0])
+
     if pixel_spacing != -1:
         patch_edge_len = int(patch_edge_len * 10 / pixel_spacing)
 
@@ -124,6 +127,122 @@ def split_into_patches_exhaustive(
                     patches[slice_idx][i * num_patches_down + j] = torch.Tensor(
                         normalize_patch(resized_patch)
                     )
+                transform_info_dicts[slice_idx][i * num_patches_down + j] = {
+                    "x1": x1,
+                    "x2": x2,
+                    "y1": y1,
+                    "y2": y2,
+                }
+
+    return patches, transform_info_dicts
+
+
+def split_into_patches_exhaustive_spacing(
+        scan: np.ndarray,
+        pixel_spacing: Union[List[float], float],
+        patch_edge_len: Union[int, float] = 26,
+        overlap_param: float = 0.4,
+        patch_size: Tuple[int, int] = (224, 224),
+        using_resnet: bool = True,
+) -> Tuple[List[List[torch.Tensor]], List[List[Dict]]]:
+    """
+    Exhaustively split 3D scan volume into resized, normalized patches for detection.
+    Ensures consistency with split_into_patches_exhaustive when px=py.
+
+    Parameters
+    ----------
+    scan : np.ndarray
+        3D scan volume (H, W, D).
+    pixel_spacing : Union[List[float], float]
+        List [row_spacing, col_spacing] in mm, or scalar.
+    patch_edge_len : float, optional
+        Patch edge in cm (converted to mm/pixels).
+    overlap_param : float, optional
+        Overlap fraction between patches.
+    patch_size : tuple of int, optional
+        Output patch size for resizing (height, width).
+    using_resnet : bool, optional
+        If True, use robust normalization suited for ResNet training.
+
+    Returns
+    -------
+    patches : List[List[torch.Tensor]]
+        List per slice, each is a list of normalized tensor patches.
+    transform_info_dicts : List[List[Dict]]
+        Patch spatial origin info per slice.
+    """
+    h, w, d = scan.shape
+
+    # Handle pixel_spacing input - match original logic exactly
+    if isinstance(pixel_spacing, (list, tuple, np.ndarray)):
+        # For consistency with original: use first element when list/array provided
+        px = py = float(pixel_spacing[0])
+    else:
+        # Scalar case
+        px = py = float(pixel_spacing)
+
+    # Calculate patch edge length in pixels - match original logic
+    if px != -1:  # If spacing provided (not sentinel value)
+        patch_edge_len_pixels = int(patch_edge_len * 10 / px)  # cm to mm, mm to pixels
+    else:
+        patch_edge_len_pixels = patch_edge_len
+
+    # Limit patch size to image dimensions - match original exactly
+    if patch_edge_len_pixels > min(scan.shape[0], scan.shape[1]):
+        patch_edge_len_pixels = min(scan.shape[0:2]) - 1
+
+    # Calculate effective stride - match original
+    effective_patch_edge_len = int(patch_edge_len_pixels * (1 - overlap_param))
+
+    # Calculate number of patches - match original
+    num_patches_across = (w // effective_patch_edge_len) + 1
+    num_patches_down = (h // effective_patch_edge_len) + 1
+    num_patches = num_patches_down * num_patches_across
+
+    # Initialize containers - match original structure
+    transform_info_dicts = [[None] * num_patches for slice_no in range(d)]
+    patches = [[None] * num_patches for slice_no in range(d)]
+
+    # Main patching loop
+    for slice_idx in range(d):
+        for i in range(num_patches_across):
+            x1 = i * effective_patch_edge_len
+            x2 = x1 + patch_edge_len_pixels
+            if x2 >= w:
+                x2 = -1  # Use -1 as sentinel for end indexing
+                x1 = -(patch_edge_len_pixels)  # Negative indexing from end
+
+            for j in range(num_patches_down):
+                y1 = j * effective_patch_edge_len
+                y2 = y1 + patch_edge_len_pixels
+                if y2 >= h:
+                    y2 = -1  # Use -1 as sentinel for end indexing
+                    y1 = -(patch_edge_len_pixels)  # Negative indexing from end
+
+                # Extract patch
+                this_patch = np.array(scan[y1:y2, x1:x2, slice_idx])
+
+                # Resize patch
+                resized_patch = cv2.resize(
+                    this_patch, patch_size, interpolation=cv2.INTER_CUBIC
+                )
+
+                # Clip values to original patch range - match original exactly
+                resized_patch[resized_patch < this_patch.min()] = this_patch.min()
+                resized_patch[resized_patch > this_patch.max()] = this_patch.max()
+
+                # Normalize and convert to tensor - EXACT match with original
+                if not using_resnet:
+                    patches[slice_idx][i * num_patches_down + j] = 0.5 * torch.Tensor(
+                        (resized_patch - np.min(resized_patch))
+                        / (np.ptp(resized_patch))
+                    )
+                else:
+                    patches[slice_idx][i * num_patches_down + j] = torch.Tensor(
+                        normalize_patch(resized_patch)
+                    )
+
+                # Store transform info - match original exactly
                 transform_info_dicts[slice_idx][i * num_patches_down + j] = {
                     "x1": x1,
                     "x2": x2,
