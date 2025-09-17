@@ -144,9 +144,10 @@ def split_into_patches_exhaustive_spacing(
         overlap_param: float = 0.4,
         patch_size: Tuple[int, int] = (224, 224),
         using_resnet: bool = True,
-) -> Tuple[List[List[np.ndarray]], List[List[Dict]]]:
+) -> Tuple[List[List[torch.Tensor]], List[List[Dict]]]:
     """
     Exhaustively split 3D scan volume into resized, normalized patches for detection.
+    Ensures consistency with split_into_patches_exhaustive when px=py.
 
     Parameters
     ----------
@@ -165,78 +166,88 @@ def split_into_patches_exhaustive_spacing(
 
     Returns
     -------
-    patches : List[List[np.ndarray]]
-        List per slice, each is a list of normalized patches.
+    patches : List[List[torch.Tensor]]
+        List per slice, each is a list of normalized tensor patches.
     transform_info_dicts : List[List[Dict]]
         Patch spatial origin info per slice.
     """
     h, w, d = scan.shape
-    
-    # Legacy scalar handling
-    if isinstance(pixel_spacing, (int, float)):
-        pixel_spacing = [float(pixel_spacing), float(pixel_spacing)]
-    elif isinstance(pixel_spacing, (list, tuple)):
-        if len(pixel_spacing) == 1:
-            pixel_spacing = [float(pixel_spacing[0]), float(pixel_spacing[0])]
-        elif len(pixel_spacing) == 2:
-            pixel_spacing = [float(pixel_spacing[0]), float(pixel_spacing[1])]
-        else:
-            raise ValueError(f"pixel_spacing must be scalar or 2-list, got {pixel_spacing}")
 
-    # Per-axis patch edge calculation (reflecting legacy usage)
-    patch_edge_len_row = patch_edge_len
-    patch_edge_len_col = patch_edge_len
+    # Handle pixel_spacing input - match original logic exactly
+    if isinstance(pixel_spacing, (list, tuple, np.ndarray)):
+        # For consistency with original: use first element when list/array provided
+        px = py = float(pixel_spacing[0])
+    else:
+        # Scalar case
+        px = py = float(pixel_spacing)
 
-    if pixel_spacing[0] != -1 and  pixel_spacing[-1] != -1 :  # If spacing provided (not sentinel value)
-        patch_edge_len_row = int(patch_edge_len * 10 / pixel_spacing[0])  # cm to mm, mm to pixels
-        patch_edge_len_col = int(patch_edge_len * 10 / pixel_spacing[1])
+    # Calculate patch edge length in pixels - match original logic
+    if px != -1:  # If spacing provided (not sentinel value)
+        patch_edge_len_pixels = int(patch_edge_len * 10 / px)  # cm to mm, mm to pixels
+    else:
+        patch_edge_len_pixels = patch_edge_len
 
-    # Prevent oversized patches
-    max_edge_length = min(h, w) - 1
-    if patch_edge_len_row > max_edge_length:
-        patch_edge_len_row = max_edge_length
-    if patch_edge_len_col > max_edge_length:
-        patch_edge_len_col = max_edge_length
+    # Limit patch size to image dimensions - match original exactly
+    if patch_edge_len_pixels > min(scan.shape[0], scan.shape[1]):
+        patch_edge_len_pixels = min(scan.shape[0:2]) - 1
 
-    effective_patch_edge_len_row = int(patch_edge_len_row * (1 - overlap_param))
-    effective_patch_edge_len_col = int(patch_edge_len_col * (1 - overlap_param))
+    # Calculate effective stride - match original
+    effective_patch_edge_len = int(patch_edge_len_pixels * (1 - overlap_param))
 
-    num_patches_across = (w // effective_patch_edge_len_col) + 1
-    num_patches_down = (h // effective_patch_edge_len_row) + 1
-
+    # Calculate number of patches - match original
+    num_patches_across = (w // effective_patch_edge_len) + 1
+    num_patches_down = (h // effective_patch_edge_len) + 1
     num_patches = num_patches_down * num_patches_across
 
-    transform_info_dicts = [[None] * num_patches for _ in range(d)]
-    patches = [[None] * num_patches for _ in range(d)]
+    # Initialize containers - match original structure
+    transform_info_dicts = [[None] * num_patches for slice_no in range(d)]
+    patches = [[None] * num_patches for slice_no in range(d)]
 
+    # Main patching loop
     for slice_idx in range(d):
         for i in range(num_patches_across):
-            x1 = i * effective_patch_edge_len_col
-            x2 = x1 + patch_edge_len_col
+            x1 = i * effective_patch_edge_len
+            x2 = x1 + patch_edge_len_pixels
             if x2 >= w:
-                x2 = -1
-                x1 = w - patch_edge_len_col
+                x2 = -1  # Use -1 as sentinel for end indexing
+                x1 = -(patch_edge_len_pixels)  # Negative indexing from end
+
             for j in range(num_patches_down):
-                y1 = j * effective_patch_edge_len_row
-                y2 = y1 + patch_edge_len_row
+                y1 = j * effective_patch_edge_len
+                y2 = y1 + patch_edge_len_pixels
                 if y2 >= h:
-                    y2 = -1
-                    y1 = h - patch_edge_len_row
-                    
+                    y2 = -1  # Use -1 as sentinel for end indexing
+                    y1 = -(patch_edge_len_pixels)  # Negative indexing from end
+
+                # Extract patch
                 this_patch = np.array(scan[y1:y2, x1:x2, slice_idx])
+
+                # Resize patch
                 resized_patch = cv2.resize(
                     this_patch, patch_size, interpolation=cv2.INTER_CUBIC
                 )
-                resized_patch = np.clip(resized_patch, this_patch.min(), this_patch.max())
 
-                patch_index = i * num_patches_down + j
+                # Clip values to original patch range - match original exactly
+                resized_patch[resized_patch < this_patch.min()] = this_patch.min()
+                resized_patch[resized_patch > this_patch.max()] = this_patch.max()
+
+                # Normalize and convert to tensor - EXACT match with original
                 if not using_resnet:
-                    patches[slice_idx][patch_index] = 0.5 * (
-                                (resized_patch - resized_patch.min()) / (resized_patch.ptp() + 1e-8))
+                    patches[slice_idx][i * num_patches_down + j] = 0.5 * torch.Tensor(
+                        (resized_patch - np.min(resized_patch))
+                        / (np.ptp(resized_patch))
+                    )
                 else:
-                    patches[slice_idx][patch_index] = normalize_patch(resized_patch)
-                transform_info_dicts[slice_idx][patch_index] = {
-                    "x1": x1, "x2": x2, "y1": y1, "y2": y2
+                    patches[slice_idx][i * num_patches_down + j] = torch.Tensor(
+                        normalize_patch(resized_patch)
+                    )
+
+                # Store transform info - match original exactly
+                transform_info_dicts[slice_idx][i * num_patches_down + j] = {
+                    "x1": x1,
+                    "x2": x2,
+                    "y1": y1,
+                    "y2": y2,
                 }
 
     return patches, transform_info_dicts
