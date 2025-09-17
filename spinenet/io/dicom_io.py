@@ -86,7 +86,7 @@ def load_dicoms(
 
         pixel_spacing = np.mean(
             [np.array(dicom_file.PixelSpacing) for dicom_file in dicom_files]
-        )
+        , axis=0)
         slice_thickness = np.mean(
             [np.array(dicom_file.SliceThickness) for dicom_file in dicom_files]
         )

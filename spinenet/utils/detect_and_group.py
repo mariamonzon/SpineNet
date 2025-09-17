@@ -61,8 +61,13 @@ def detect_and_group(
             polygons detected.
     """
 
+
     # split the scan into different patches
     patches, transform_info_dicts = split_into_patches_exhaustive(
+        scan, pixel_spacing=pixel_spacing, overlap_param=0.4, using_resnet=using_resnet
+    )
+    # split the scan into different patches
+    patches2d, transform_info_dicts2d = split_into_patches_exhaustive(
         scan, pixel_spacing=pixel_spacing, overlap_param=0.4, using_resnet=using_resnet
     )
     # group the detections made in each patch into slice level detections
