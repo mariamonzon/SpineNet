@@ -69,7 +69,7 @@ def split_into_patches_exhaustive(
         Patch spatial origin info per slice.
     """
     h, w, d = scan.shape
-
+    
     # Legacy scalar handling
     if isinstance(pixel_spacing, (int, float)):
         pixel_spacing = [float(pixel_spacing), float(pixel_spacing)]
@@ -101,6 +101,7 @@ def split_into_patches_exhaustive(
 
     num_patches_across = (w // effective_patch_edge_len_col) + 1
     num_patches_down = (h // effective_patch_edge_len_row) + 1
+
     num_patches = num_patches_down * num_patches_across
 
     transform_info_dicts = [[None] * num_patches for _ in range(d)]
@@ -108,17 +109,19 @@ def split_into_patches_exhaustive(
 
     for slice_idx in range(d):
         for i in range(num_patches_across):
+
             x1 = i * effective_patch_edge_len_col
             x2 = x1 + patch_edge_len_col
             if x2 >= w:
-                x2 = w
+                x2 = -1
                 x1 = w - patch_edge_len_col
             for j in range(num_patches_down):
                 y1 = j * effective_patch_edge_len_row
                 y2 = y1 + patch_edge_len_row
                 if y2 >= h:
-                    y2 = h
+                    y2 = -1
                     y1 = h - patch_edge_len_row
+                    
                 this_patch = np.array(scan[y1:y2, x1:x2, slice_idx])
                 resized_patch = cv2.resize(
                     this_patch, patch_size, interpolation=cv2.INTER_CUBIC
