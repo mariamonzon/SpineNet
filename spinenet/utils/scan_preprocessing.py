@@ -172,82 +172,94 @@ def split_into_patches_exhaustive_spacing(
         Patch spatial origin info per slice.
     """
     h, w, d = scan.shape
-
-    # Handle pixel_spacing input - match original logic exactly
-    if isinstance(pixel_spacing, (list, tuple, np.ndarray)):
-        # For consistency with original: use first element when list/array provided
+    # Interpret pixel_spacing input robustly and support separate row/col spacings
+    if len(pixel_spacing) == 2:
+        px = float(pixel_spacing[0])  # Row spacing
+        py = float(pixel_spacing[-1])  # Column spacing
+    elif isinstance(pixel_spacing, (list, tuple, np.ndarray)):
         px = py = float(pixel_spacing[0])
     else:
         # Scalar case
         px = py = float(pixel_spacing)
 
-    # Calculate patch edge length in pixels - match original logic
-    if px != -1:  # If spacing provided (not sentinel value)
-        patch_edge_len_pixels = int(patch_edge_len * 10 / px)  # cm to mm, mm to pixels
+    # If spacing is sentinel -1 (as used elsewhere), fall back to pixel units
+    if px != -1 and py != -1:
+        # patch_edge_len is given in cm -> convert to mm then to pixels per axis
+        patch_edge_len_mm = patch_edge_len * 10.0
+        patch_edge_h = int(np.round(patch_edge_len_mm / px))  # height in pixels
+        patch_edge_w = int(np.round(patch_edge_len_mm / py))  # width in pixels
     else:
-        patch_edge_len_pixels = patch_edge_len
+        # treat provided patch_edge_len as pixels if spacing not provided
+        patch_edge_h = patch_edge_w = int(patch_edge_len)
 
-    # Limit patch size to image dimensions - match original exactly
-    if patch_edge_len_pixels > min(scan.shape[0], scan.shape[1]):
-        patch_edge_len_pixels = min(scan.shape[0:2]) - 1
+    # Ensure patch edge does not exceed image dims
+    patch_edge_h = min(patch_edge_h, h - 1)
+    patch_edge_w = min(patch_edge_w, w - 1)
 
-    # Calculate effective stride - match original
-    effective_patch_edge_len = int(patch_edge_len_pixels * (1 - overlap_param))
+    # Effective stride along each axis
+    stride_h = max(1, int(patch_edge_h * (1 - overlap_param)))
+    stride_w = max(1, int(patch_edge_w * (1 - overlap_param)))
 
-    # Calculate number of patches - match original
-    num_patches_across = (w // effective_patch_edge_len) + 1
-    num_patches_down = (h // effective_patch_edge_len) + 1
+    # Compute number of patches along each axis
+    num_patches_across = (w // stride_w) + 1
+    num_patches_down = (h // stride_h) + 1
     num_patches = num_patches_down * num_patches_across
 
-    # Initialize containers - match original structure
-    transform_info_dicts = [[None] * num_patches for slice_no in range(d)]
-    patches = [[None] * num_patches for slice_no in range(d)]
+    transform_info_dicts = [[None] * num_patches for _ in range(d)]
+    patches = [[None] * num_patches for _ in range(d)]
 
-    # Main patching loop
     for slice_idx in range(d):
         for i in range(num_patches_across):
-            x1 = i * effective_patch_edge_len
-            x2 = x1 + patch_edge_len_pixels
+            x1 = i * stride_w
+            x2 = x1 + patch_edge_w
             if x2 >= w:
-                x2 = -1  # Use -1 as sentinel for end indexing
-                x1 = -(patch_edge_len_pixels)  # Negative indexing from end
-
+                x2 = -1
+                x1 = -patch_edge_w
             for j in range(num_patches_down):
-                y1 = j * effective_patch_edge_len
-                y2 = y1 + patch_edge_len_pixels
+                y1 = j * stride_h
+                y2 = y1 + patch_edge_h
                 if y2 >= h:
-                    y2 = -1  # Use -1 as sentinel for end indexing
-                    y1 = -(patch_edge_len_pixels)  # Negative indexing from end
+                    y2 = -1
+                    y1 = -patch_edge_h
 
-                # Extract patch
                 this_patch = np.array(scan[y1:y2, x1:x2, slice_idx])
 
-                # Resize patch
-                resized_patch = cv2.resize(
-                    this_patch, patch_size, interpolation=cv2.INTER_CUBIC
-                )
+                # In rare cases patch may be empty due to shape issues; skip gracefully
+                if this_patch.size == 0:
+                    resized_patch = np.zeros(patch_size, dtype=scan.dtype)
+                else:
+                    resized_patch = cv2.resize(
+                        this_patch, patch_size, interpolation=cv2.INTER_CUBIC
+                    )
+                    # Clip to original patch value range
+                    resized_patch[resized_patch < this_patch.min()] = this_patch.min()
+                    resized_patch[resized_patch > this_patch.max()] = this_patch.max()
 
-                # Clip values to original patch range - match original exactly
-                resized_patch[resized_patch < this_patch.min()] = this_patch.min()
-                resized_patch[resized_patch > this_patch.max()] = this_patch.max()
-
-                # Normalize and convert to tensor - EXACT match with original
+                # Normalize and convert to torch tensor
                 if not using_resnet:
-                    patches[slice_idx][i * num_patches_down + j] = 0.5 * torch.Tensor(
-                        (resized_patch - np.min(resized_patch))
-                        / (np.ptp(resized_patch))
+                    # protect against zero dynamic range
+                    ptp = np.ptp(resized_patch)
+                    if ptp == 0:
+                        normed = np.zeros_like(resized_patch, dtype=np.float32)
+                    else:
+                        normed = 0.5 * ((resized_patch - resized_patch.min()) / (ptp))
+                    patches[slice_idx][i * num_patches_down + j] = torch.tensor(
+                        normed, dtype=torch.float32
                     )
                 else:
-                    patches[slice_idx][i * num_patches_down + j] = torch.Tensor(
-                        normalize_patch(resized_patch)
+                    patches[slice_idx][i * num_patches_down + j] = torch.tensor(
+                        normalize_patch(resized_patch), dtype=torch.float32
                     )
 
-                # Store transform info - match original exactly
                 transform_info_dicts[slice_idx][i * num_patches_down + j] = {
                     "x1": x1,
                     "x2": x2,
                     "y1": y1,
                     "y2": y2,
+                    "patch_edge_h": patch_edge_h,
+                    "patch_edge_w": patch_edge_w,
+                    "stride_h": stride_h,
+                    "stride_w": stride_w,
                 }
 
     return patches, transform_info_dicts
